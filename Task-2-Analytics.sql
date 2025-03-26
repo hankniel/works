@@ -173,9 +173,104 @@ SELECT
     END AS coin,
     *
 FROM `royal-hexa-in-house.pixon_data_science.001_mock`
-WHERE event_name IN ('start_level', 'start_level_phase', 'win_level', 'lose_level', 'revive')
+WHERE event_name IN ('start_level', 'start_level_phase', 'win_level', 'lose_level', 
+    'revive', 'in_app_purchase', 'booster_buy', 'booster_use', 'lucky_spin', 'refill_heart')
+ORDER BY user_pseudo_id, event_timestamp
+LIMIT 1000
+
+--* in game events
+SELECT 
+    event_name,
+    *
+FROM `royal-hexa-in-house.pixon_data_science.001_mock`
+WHERE event_name IN ('booster_buy', 'booster_use', 'lucky_spin', 'refill_heart')
 ORDER BY user_pseudo_id, event_timestamp
 LIMIT 100
+
+WITH level_stats AS (
+  SELECT 
+    CASE 
+      WHEN event_name = 'start_level' THEN CAST((
+        SELECT value.string_value 
+        FROM UNNEST(event_params) 
+        WHERE key = 'level'
+      ) AS INT64)
+      WHEN event_name IN ('win_level', 'lose_level') THEN CAST((
+        SELECT value.int_value 
+        FROM UNNEST(event_params) 
+        WHERE key = 'level'
+      ) AS INT64)
+    END as level,
+    COUNT(DISTINCT CASE WHEN event_name = 'start_level' THEN user_pseudo_id END) as attempts,
+    COUNT(DISTINCT CASE WHEN event_name = 'win_level' THEN user_pseudo_id END) as wins,
+    COUNT(DISTINCT CASE WHEN event_name = 'lose_level' THEN user_pseudo_id END) as losses,
+    AVG(CASE WHEN event_name = 'win_level' THEN (
+      SELECT value.int_value 
+      FROM UNNEST(event_params) 
+      WHERE key = 'coin'
+    ) END) as avg_coins_won
+  FROM `royal-hexa-in-house.pixon_data_science.001_mock`
+  WHERE event_name IN ('start_level', 'win_level', 'lose_level')
+  GROUP BY level
+  ORDER BY level
+)
+SELECT 
+  level,
+  attempts,
+  wins,
+  losses,
+  ROUND(SAFE_DIVIDE(wins, attempts) * 100, 2) as win_rate,
+  ROUND(SAFE_DIVIDE(losses, attempts) * 100, 2) as loss_rate,
+  ROUND(avg_coins_won, 2) as avg_coins_won
+FROM level_stats
+
+WITH user_progression AS (
+  SELECT 
+    user_pseudo_id,
+    MIN(TIMESTAMP_MICROS(event_timestamp)) as first_event,
+    MAX(TIMESTAMP_MICROS(event_timestamp)) as last_event,
+    MAX(CASE WHEN event_name = 'start_level' THEN CAST((
+      SELECT value.string_value 
+      FROM UNNEST(event_params) 
+      WHERE key = 'level'
+    ) AS INT64) END) as max_level_reached,
+    COUNT(DISTINCT CASE WHEN event_name = 'in_app_purchase' THEN event_timestamp END) as purchase_count
+  FROM `royal-hexa-in-house.pixon_data_science.001_mock`
+  GROUP BY user_pseudo_id
+)
+SELECT 
+  max_level_reached,
+  COUNT(DISTINCT user_pseudo_id) as user_count,
+  COUNT(DISTINCT CASE WHEN purchase_count > 0 THEN user_pseudo_id END) as paying_users,
+  ROUND(AVG(TIMESTAMP_DIFF(last_event, first_event, DAY)), 2) as avg_days_active,
+  ROUND(SAFE_DIVIDE(COUNT(DISTINCT CASE WHEN purchase_count > 0 THEN user_pseudo_id END), 
+    COUNT(DISTINCT user_pseudo_id)) * 100, 2) as paying_user_rate
+FROM user_progression
+GROUP BY max_level_reached
+ORDER BY max_level_reached
+
+WITH user_segments AS (
+  SELECT 
+    user_pseudo_id,
+    MAX(CASE WHEN event_name = 'in_app_purchase' THEN 1 ELSE 0 END) as is_spender,
+    COUNT(DISTINCT CASE WHEN event_name = 'session_start' THEN DATE(TIMESTAMP_MICROS(event_timestamp)) END) as days_active,
+    MAX(CASE WHEN event_name = 'start_level' THEN CAST((
+      SELECT value.string_value 
+      FROM UNNEST(event_params) 
+      WHERE key = 'level'
+    ) AS INT64) END) as max_level_reached
+  FROM `royal-hexa-in-house.pixon_data_science.001_mock`
+  GROUP BY user_pseudo_id
+)
+SELECT 
+  CASE WHEN is_spender = 1 THEN 'Spender' ELSE 'Non-spender' END as user_type,
+  COUNT(DISTINCT user_pseudo_id) as user_count,
+  ROUND(AVG(days_active), 2) as avg_days_active,
+  ROUND(AVG(max_level_reached), 2) as avg_max_level,
+  ROUND(SAFE_DIVIDE(COUNT(DISTINCT CASE WHEN max_level_reached >= 10 THEN user_pseudo_id END),
+    COUNT(DISTINCT user_pseudo_id)) * 100, 2) as retention_rate_10plus
+FROM user_segments
+GROUP BY is_spender
 
 --* In-app purchase events
 SELECT 
@@ -211,8 +306,9 @@ select
     event_param.value.double_value as double_value
 FROM `royal-hexa-in-house.pixon_data_science.001_mock`,
     unnest(event_params) as event_param
-where event_name = 'in_app_purchase'
+where event_name = 'refill_heart'
 limit 100
+
 
 --* Ad-related events
 
@@ -276,6 +372,6 @@ limit 100
 "free_pass_claim_all" -- Claimed all free pass rewards
 "gold_pass_claim" -- Claimed gold pass reward
 "gold_pass_claim_all" -- Claimed all gold pass rewards
-"in_app_purchase" -- Made in-app purchase
+"in_app_purchase" -- Made in-app purchase chua co thong tin purchase item gi 
 "inter_attempt" -- Attempted interaction
 "reward_attempt" -- Attempted to claim reward
