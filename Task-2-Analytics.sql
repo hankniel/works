@@ -187,6 +187,8 @@ WHERE event_name IN ('booster_buy', 'booster_use', 'lucky_spin', 'refill_heart')
 ORDER BY user_pseudo_id, event_timestamp
 LIMIT 100
 
+
+
 WITH level_stats AS (
   SELECT 
     CASE 
@@ -375,3 +377,37 @@ limit 100
 "in_app_purchase" -- Made in-app purchase chua co thong tin purchase item gi 
 "inter_attempt" -- Attempted interaction
 "reward_attempt" -- Attempted to claim reward
+
+
+
+WITH level_stats AS (
+	SELECT 
+		CASE WHEN event_name = "win_level" 
+			THEN CAST((
+				SELECT value.int_value 
+				FROM UNNEST(event_params) 
+				WHERE key = "level"
+				) AS INT64) 
+		WHEN event_name = "lose_level" 
+			THEN CAST((
+				SELECT value.string_value 
+				FROM UNNEST(event_params) 
+				WHERE key = "level"
+				) AS INT64) 
+		END as level, 
+		COUNT(DISTINCT CASE WHEN event_name = "win_level" THEN user_pseudo_id END) as wins, 
+		COUNT(DISTINCT CASE WHEN event_name = "lose_level" THEN user_pseudo_id END) as losses 
+	FROM `royal-hexa-in-house.pixon_data_science.001_mock` 
+	WHERE event_name IN ("win_level", "lose_level") 
+	GROUP BY level
+) 
+SELECT 
+	level, 
+	wins, 
+	losses, 
+	wins + losses as total_attempts, 
+	ROUND(SAFE_DIVIDE(wins, wins + losses) * 100, 2) as win_rate, 
+	ROUND(SAFE_DIVIDE(losses, wins + losses) * 100, 2) as loss_rate 
+FROM level_stats 
+WHERE level IS NOT NULL 
+ORDER BY level
